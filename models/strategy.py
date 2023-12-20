@@ -1,7 +1,8 @@
 import os, sys
-sys.path.append("../")
+sys.path.append("./")
 
 from enum import Enum
+from uuid import uuid4
 from pandas import Series, DataFrame, Timestamp, DatetimeIndex
 from pyRofex import Side as OrderSide, OrderType, TimeInForce
 from utils.constants import *
@@ -12,17 +13,26 @@ from utils.constants import *
 
 class Signal:
 
-    class Oper(Enum): ORDER, MODIFY, CANCEL = range(3)
+    class Action(Enum): ORDER, MODIFY, CANCEL = range(3)
+
+    RESPONSE_COLUMNS = ["id_signal", "id_order", "status", "proprietary", "symbol", "size",
+                "price", "type", "side", "oper", "tif", "SL", "TP", "dms_send", "dms_exec"]
+    
+    @staticmethod
+    def get_uid(n: int = 8):
+        uid = str(uuid4()).upper()
+        return uid.replace("-", "")[: n]
         
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def __init__(self, **kwargs):
 
-        self.oper = kwargs.pop("oper")
-        assert isinstance(self.oper, self.Oper)
+        self.action = kwargs.pop("oper")
+        assert isinstance(self.action, self.Action)
         self.comment = kwargs.pop("comment", "")
         assert isinstance(self.comment, str)
+        self.id_signal = kwargs.pop("uid", self.get_uid())
 
-        if (self.oper == self.Oper.ORDER):
+        if (self.action == self.Action.ORDER):
             self.size = kwargs.pop("size")
             self.side = kwargs.pop("side")
             self.symbol = kwargs.pop("symbol")
@@ -38,7 +48,7 @@ class Signal:
         else:
             self.ID = kwargs.pop("ID")
             assert isinstance(self.ID, str)
-            if (self.oper == self.Oper.MODIFY):
+            if (self.action == self.Action.MODIFY):
                 self.price = kwargs.pop("price")
                 self.SL = kwargs.pop("SL", None)
                 self.TP = kwargs.pop("TP", None)
@@ -48,28 +58,32 @@ class Signal:
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def _type_check_basic(self):
         assert isinstance(self.size, (int, float))
-        assert isinstance(self.price, (int, float))
         assert isinstance(self.SL, (int, float)) or (self.SL is None)
         assert isinstance(self.TP, (int, float)) or (self.TP is None)
+        assert isinstance(self.price, (int, float)) or (self.SL is None)
 
     def _type_check_place(self):
         assert isinstance(self.symbol, str)
-        assert isinstance(self.type, OrderSide)
-        assert isinstance(self.side, OrderType)
+        assert isinstance(self.type, OrderType)
+        assert isinstance(self.side, OrderSide)
         assert isinstance(self.tif, TimeInForce)
+        if (self.type == OrderType.LIMIT):
+            assert self.price is not None
 
     def flip(self):
-        if self.side == OrderSide.BUY:
-            self.side = OrderSide.SELL
-        else: self.side = OrderSide.BUY
-        return self
+        self.side = {
+            OrderSide.BUY: OrderSide.SELL,
+            OrderSide.SELL: OrderSide.BUY
+        }[self.side]
     
     @property
     def dict(self):
-        return {"size": self.size, "price": self.price,
+        return {
+            "id_signal": self.id_signal, "symbol": self.symbol,
+            "size": self.size, "price": self.price,
             "type": self.type.name, "side": self.side.name,
-            "oper": self.oper.name, "tif": self.tif.name,
-            "SL": self.SL, "TP": self.TP, "ID": self.ID}
+            "oper": self.action.name, "tif": self.tif.name,
+            "SL": self.SL, "TP": self.TP, "id_order": self.ID}
     
     @property
     def form(self):
@@ -80,12 +94,16 @@ class Signal:
     
     def __dict__(self):
         return self.dict
+    
+    def __repr__(self):
+        return ("Signal(%s)" % ", ".join(["%s: %s"
+                % KV for KV in self.dict.items()]))
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     @classmethod
-    def test(cls):
-        return cls(oper = Signal.Oper.ORDER,
-            size = 1, side = OrderSide.SELL)
+    def test(cls, symbol):
+        return cls(symbol = symbol, side = OrderSide.SELL,
+                    size = 1, oper = Signal.Action.ORDER)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -93,22 +111,22 @@ class Signal:
 
 class Strategy:
 
-    def __init__(self, name: str, feeds: dict):
+    TEMPLATE_SIGNALS = DataFrame(columns = Signal.RESPONSE_COLUMNS).rename_axis("ts_resp")
+
+    def __init__(self, name: str, symbols: list):
 
         self.name = name
-        self.feeds = feeds
         self.active = False
-        self.signals: DataFrame = DataFrame()
+        self.symbols = symbols
         self.time_created = Timestamp.utcnow()
-        self.time_executed: Timestamp = None
-        self.time_activated: Timestamp = None
-        self.last_order: Signal = None
+        self.time_executed = self.time_activated = Timestamp("NaT")
+        self.signals = self.TEMPLATE_SIGNALS.copy()
+        self.last_order = Signal.test(symbols[0])
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def on_tick(self, data: DataFrame) -> list:
         
-        print("Base model for strategy running...")
-        print("Received data: "), print(data)
-        if self.last_order is not None: 
-            return [self.last_order.flip()]
-        else: return [Signal.test()]
+        self.last_order.flip()
+        print("Strategy", self.name, "on_tick")
+        print(), print(data)
+        return [self.last_order]

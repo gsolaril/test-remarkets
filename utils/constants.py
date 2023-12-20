@@ -1,5 +1,5 @@
 import os, sys
-sys.path.append("../")
+sys.path.append("./")
 
 PATH_FOLDER_AUTH = "./auth/"
 PATH_FOLDER_DOCS = "./docs/"

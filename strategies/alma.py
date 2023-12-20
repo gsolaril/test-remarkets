@@ -1,5 +1,5 @@
 import os, sys
-sys.path.append("../")
+sys.path.append("./")
 
 import numpy, pyRofex
 from pandas import Series, DataFrame
