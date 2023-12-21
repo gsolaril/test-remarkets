@@ -30,19 +30,19 @@ class Interface(Manager):
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     @classmethod
-    def parse_data_market(cls, msg: dict):
+    def parse_data_market(cls, entry: dict):
 
         ts_local = Timestamp.utcnow()
-        ts_event = msg.pop("timestamp")
-        data: dict = msg.pop("marketData")
-        market, symbol = msg.pop("instrumentId").values()
-        last_price, last_size, ts_last = data.pop("LA").values()
+        ms_event = entry.pop("timestamp")
+        data: dict = entry.pop("marketData")
         iv, tv = data.pop("IV"), data.pop("TV")
         oi, nv = data.pop("OI"), data.pop("NV")
-        ts_last = Timestamp(ts_last, unit = "ms", tz = "UTC")
-        ts_event = Timestamp(ts_event, unit = "ms", tz = "UTC")
-        dms_last = int((ts_local - ts_last).total_seconds() * 1000)
-        dms_event = int((ts_local - ts_event).total_seconds() * 1000)
+        last_price, last_size, ms_last = data.pop("LA").values()
+        market, symbol = entry.pop("instrumentId").values()
+
+        ms_local = ts_local.timestamp() * 1000
+        dms_event = int(ms_local - ms_event)
+        dms_last = int(ms_local - ms_last)
 
         book = concat(axis = "columns", objs = {
                 "ask": DataFrame(data.pop("OF")),
@@ -63,29 +63,47 @@ class Interface(Manager):
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def _run_strategies(self, symbols: set):
 
+        Log.configure(extra = {"obj": "Interface"})
+
+        new_signals = dict()
         for name in self.strategies:
             strat: Strategy = self.strategies[name]
-            obj_symbols = set(strat.symbols) & symbols
+            strat_symbols = set(strat.specs_derivs.index)
+            strat_symbols = symbols & strat_symbols
             if not strat.active: continue
 
-            ts_exec = Timestamp.utcnow()
-            is_feed = self.symbol_ticks["symbol"].isin(obj_symbols)
+            ms_exec = Timestamp.utcnow().timestamp() * 1000
+            is_feed = self.symbol_ticks["symbol"].isin(strat_symbols)
             signals = strat.on_tick(self.symbol_ticks.loc[is_feed])
             strat.time_executed = Timestamp.utcnow()
             if not isinstance(signals, list): continue
+            strat_class = strat.__class__.__name__
+            new_signals[name] = list()
 
             for signal in signals:
-                ts_send = Timestamp.utcnow()
+
                 if not isinstance(signal, Signal): continue
+                ms_send = Timestamp.utcnow().timestamp() * 1000
                 ID, proprietary, status = self.execute(signal)
                 ts_resp = Timestamp.utcnow()
-                dms_send = int((ts_send - ts_exec).total_seconds() * 1000)
-                dms_exec = int((ts_resp - ts_exec).total_seconds() * 1000)
-                strat.signals.loc[ts_resp] = {**signal.dict, "id_order": ID,
-                        "status": status, "proprietary": proprietary,
-                        "dms_send": dms_send, "dms_exec": dms_exec}
+                ms_resp = ts_resp.timestamp() * 1000
+
+                strat.signals.loc[ts_resp] = {
+                    **signal.dict, "status": status,
+                    "id_order": ID, "prop": proprietary,
+                    "dms_send": int((ms_send - ms_exec)),
+                    "dms_exec": int((ms_resp - ms_exec))}
+                
+                new_signals[name].append({
+                    "strat_class": strat_class,
+                    "time_since": ts_resp, **signal.dict,
+                    "status": status, "id_order": ID})
             
-            print(strat.signals)
+        index_labels = ["strat_class", "strat_name", "time_since"]
+        new_signals = DataFrame(new_signals).rename_axis("strat_name")
+        new_signals["time_since"] = Timestamp.utcnow() - new_signals["time_since"]
+        new_signals = new_signals.reset_index().set_index(index_labels).sort_index()
+        Log.info(f"Recent signals ({new_signals.shape[0]}):"), print(new_signals)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def execute(self, signal: Signal):
@@ -109,11 +127,11 @@ class Interface(Manager):
         
         alert_symbols = set()
         entry = self.parse_data_market(entry)
-        ts_local = entry.pop("ts")
-        alert_symbols.add(entry["symbol"])
+        ts_local: Timestamp = entry.pop("ts")
         self.symbol_ticks.loc[ts_local] = entry
+        alert_symbols.add(entry["symbol"])
 
-        self._run_strategies(alert_symbols)
+        # self._run_strategies(alert_symbols)
         n_ticks = self.symbol_ticks.shape[0]
         n_ticks_max = self.SYMBOL_TICKS_GLOBAL_MAX
         if (n_ticks > n_ticks_max):
@@ -135,7 +153,7 @@ class Interface(Manager):
 if __name__ == "__main__":
 
     interface = Interface()
-    test_symbols = ["YPFD/DIC23", "TRI.ROS/ENE24", "ORO/ENE24"]
+    test_symbols = ["YPFD/DIC23", "PAMP/DIC23", "GGAL/DIC23"]
     test_strategy = Strategy(name = "test", symbols = test_symbols)
     interface.load_strategies(test_strategy)
     interface.toggle_strategies(**{test_strategy.name: True})

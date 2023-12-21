@@ -1,11 +1,17 @@
-import os, sys
+import os, sys, json
 sys.path.append("./")
 
+import warnings
 from enum import Enum
 from uuid import uuid4
-from pandas import Series, DataFrame, Timestamp, DatetimeIndex
+from pandas import Series, DataFrame, Timestamp, Timedelta
+from apscheduler.schedulers.background import BackgroundScheduler
 from pyRofex import Side as OrderSide, OrderType, TimeInForce
 from utils.constants import *
+from yfinance import Ticker
+
+# Suppress FutureWarning messages
+warnings.simplefilter(action = "ignore", category = FutureWarning)
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -15,8 +21,8 @@ class Signal:
 
     class Action(Enum): ORDER, MODIFY, CANCEL = range(3)
 
-    RESPONSE_COLUMNS = ["id_signal", "id_order", "status", "proprietary", "symbol", "size",
-                "price", "type", "side", "oper", "tif", "SL", "TP", "dms_send", "dms_exec"]
+    RESPONSE_COLUMNS = ["id_signal", "id_order", "status", "prop", "symbol", "size",
+         "price", "type", "side", "oper", "tif", "SL", "TP", "dms_send", "dms_exec"]
     
     @staticmethod
     def get_uid(n: int = 8):
@@ -54,7 +60,7 @@ class Signal:
                 self.TP = kwargs.pop("TP", None)
                 self.size = kwargs.pop("size")
                 self._type_check_basic()
-                
+
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def _type_check_basic(self):
         assert isinstance(self.size, (int, float))
@@ -113,15 +119,59 @@ class Strategy:
 
     TEMPLATE_SIGNALS = DataFrame(columns = Signal.RESPONSE_COLUMNS).rename_axis("ts_resp")
 
-    def __init__(self, name: str, symbols: list):
+    FREQ_UPD_UNDERS = Timedelta(minutes = 1)
+    COLUMNS_UNDERLYING = ["currency", "exchange", "open", "shares", "day_high",
+                      "day_low", "previous_close", "last_price", "last_volume"]
 
-        self.name = name
-        self.active = False
-        self.symbols = symbols
+    #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+    def __init__(self, name: str, symbols: list, tasks: dict = dict()):
+
+        strat_class = self.__class__.__name__
+        Log.configure(extra = {"obj": "Strategy"})
+
+        self.name, self.active = name, False
+        self.time_executed = Timestamp("NaT")
+        self.time_activated = Timestamp("NaT")
         self.time_created = Timestamp.utcnow()
-        self.time_executed = self.time_activated = Timestamp("NaT")
         self.signals = self.TEMPLATE_SIGNALS.copy()
+        self.specs_derivs = DataFrame(index = symbols)
         self.last_order = Signal.test(symbols[0])
+        self.tasks = BackgroundScheduler()
+
+        verbose = {"name": name, "strat": strat_class}
+
+        tasks = {self.update_unders: self.FREQ_UPD_UNDERS, **tasks}
+        for task, freq in tasks.items():
+            freq: Timedelta = freq.total_seconds()
+            self.tasks.add_job(func = task, seconds = freq,
+                trigger = "interval", name = task.__name__)
+            
+        Log.info("Tasks for \"{strat} - {name}\":", **verbose)
+        self.tasks.print_jobs()
+
+    #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+    def update_derivs(self, specs: DataFrame):
+        self.specs_derivs = specs.copy()
+        unders = self.specs_derivs["underlying"].unique()
+        self.specs_unders = DataFrame(index = unders,
+                    columns = self.COLUMNS_UNDERLYING)
+        self.update_unders()
+
+    # FIXME: MOVE UNDERLYING DATA RETRIEVAL AND SCHEDULE TO MANAGER
+
+    def update_unders(self): 
+        if self.specs_derivs.empty: return
+        unders = Series(self.specs_unders.index)
+        specs_unders = unders.map(Ticker).map(self._parse_yf)
+        specs_unders = specs_unders.apply(Series).set_index(unders)
+        self.specs_unders = specs_unders
+
+    @classmethod
+    def _parse_yf(cls, ticker: Ticker):
+        data = ticker.fast_info
+        try: data = data.toJSON()
+        except: data = "{}"
+        return json.loads(data)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def on_tick(self, data: DataFrame) -> list:

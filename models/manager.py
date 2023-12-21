@@ -6,7 +6,6 @@ from pyRofex import MarketDataEntry as MarketInfo
 from pandas import Series, DataFrame
 from pandas import to_datetime, read_csv
 from configparser import ConfigParser
-from loguru import logger as Log
 
 from utils.constants import *
 from strategy import Strategy
@@ -34,16 +33,26 @@ class Manager:
     
     TEMPLATE_MARKET_DATA = DataFrame(columns = MARKET_DATA_COLUMNS).rename_axis("ts_local")
 
+    HC_UNDERLYING = dict(YPFD = "YPF", ORO = "XAUUSD=X")
+
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def __init__(self, **kwargs):
+
+        Log.configure(extra = {"obj": "Manager"})
 
         if not kwargs:
             kwargs = ConfigParser()
             kwargs.read(self.PATH_FILE_CREDS)
             kwargs = dict(**kwargs["REMARKET"],
                 environment = pyRofex.Environment.REMARKET)
+            
+            Log.info(f"Using \"{self.PATH_FILE_CREDS}\"")
 
-        pyRofex.initialize(**kwargs)
+        Log.info("Connecting to \"{user} - {account}\"", **kwargs)
+
+        try: pyRofex.initialize(**kwargs), Log.success(f"Connected OK")
+        except Exception as EXC: Log.error(f"Connection error: {repr(EXC)}")
+
         self.user = kwargs.pop("user")
         self.account = kwargs.pop("account")
         self.password = kwargs.pop("password")
@@ -53,14 +62,18 @@ class Manager:
         self.symbol_ticks = self.TEMPLATE_MARKET_DATA.copy()
 
         if os.path.isfile(self.PATH_FILE_SPECS):
-            self.specs = read_csv(self.PATH_FILE_SPECS)
-            self.specs = self.specs.set_index("symbol")
-        else: self.specs = self._get_specs(self.environment)
+            self.specs: DataFrame = read_csv(self.PATH_FILE_SPECS)
+            self.specs: DataFrame = self.specs.set_index("symbol")
+        else: self.specs: DataFrame = self._get_specs(self.environment)
+
+        verbose = {"n_specs": len(self.specs), "path": self.PATH_FILE_SPECS}
+        Log.success("Got {n_specs} symbol specs (\"{path}\")", **verbose)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     @classmethod
     def _get_specs(cls, environment: pyRofex.Environment):
 
+        Log.warning(f"\"{cls.PATH_FILE_SPECS}\" not found. Downloading...")
         specs = DataFrame(pyRofex.get_detailed_instruments(environment))
         specs = specs["instruments"].apply(Series)
 
@@ -91,49 +104,88 @@ class Manager:
         specs["maturity"] = to_datetime(specs["maturity"], format = "%Y%m%d")
         specs["order_types"] = specs["order_types"].map(", ".join)
         specs["order_tifs"] = specs["order_tifs"].map(", ".join)
+
+        specs["underlying"] = specs.index.copy()
+        is_line = specs.index.str.contains(" - ")
+        is_point = specs.index.str.contains(".")
+        is_slash = specs.index.str.contains("/")
+        specs.loc[is_line, "underlying"] = specs.index.str.split(" - ").str[2]
+        specs.loc[is_slash, "underlying"] = specs.index.str.split("/").str[0]
+        specs.loc[is_point, "underlying"] = specs.index.str.split(".").str[0]
+        Log.debug(f"Replacements for underlying tickers: {cls.HC_UNDERLYING}")
+
+        for replace in cls.HC_UNDERLYING:
+            specs["underlying"] = specs["underlying"].replace(**replace)
+
         specs.to_csv(cls.PATH_FILE_SPECS)
+        verbose = {"n_specs": len(specs), "path": cls.PATH_FILE_SPECS}
+        Log.success("Saved {n_specs} symbol specs (\"{path}\")", **verbose)
         return specs
     
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def load_strategies(self, strats: list):
 
+        Log.configure(extra = {"obj": "Manager"})
+
         if isinstance(strats, Strategy): strats = [strats]
         for strat in strats:
             strat: Strategy = strat
             if strat.name in self.strategies:
-                print(f"Strategy {strat.name} already loaded")
+                Log.warning(f"Strategy {strat.name} already loaded")
             else:
+                symbols = strat.specs_derivs.index.to_list()
+                verbose = {"strategy": strat.__class__.__name__,
+                        "name": strat.name, "symbols": symbols}
+                Log.info("Loading \"{strategy} - {name}\".", **verbose)
+                pyRofex.market_data_subscription(tickers = symbols,
+                        entries = self.MARKET_DATA_ENUMS, depth = 5)
+                Log.success("Subscribed to: " + ", ".join(symbols))
                 self.strategies[strat.name] = strat
-                pyRofex.market_data_subscription(
-                    tickers = strat.symbols, depth = 5,
-                    entries = self.MARKET_DATA_ENUMS)
-                for symbol in strat.symbols:
+                
+                strat_specs = self.specs.loc[symbols]
+                strat.update_derivs(strat_specs.copy())
+                # strat.tasks.start()
+                for symbol in strat.specs_derivs.index:
                     if (symbol not in self.symbol_feeds):
                         self.symbol_feeds[symbol] = list()
                     feed: list = self.symbol_feeds[symbol]
                     feed.append(strat.name)
 
+            Log.info("Loaded \"{strategy} - {name}\"", **verbose)
+
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def toggle_strategies(self, **kwargs):
 
+        Log.configure(extra = {"obj": "Manager"})
+        actions = {True: "Enabled", False: "Disabled"}
+
         for name, value in kwargs.items():
+            verbose = {"name": name}
             if name not in self.strategies:
-                print(f"Strategy {name} not loaded")
+                Log.warning("Strategy \"{name}\" invalid.", **verbose)
             else:
                 strat: Strategy = self.strategies[name]
+                verbose["strat"] = strat.__class__.__name__
+                verbose["action"] = actions[value]
                 strat.active = bool(value)
+                Log.warning("{action} \"{strat} - {name}\"", **verbose)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def remove_strategies(self, names: list):
 
+        Log.configure(extra = {"obj": "Manager"})
+
         if isinstance(names, str): names = [names]
         for name in names:
+            verbose = {"name": name}
             if name not in self.strategies:
-                print(f"Strategy {strat.name} not loaded")
+                Log.warning("Strategy {strat.name} invalid", **verbose)
             else:
                 strat: Strategy = self.strategies.pop(name)
+                verbose["strat"] = strat.__class__.__name__
                 # pyRofex.market_data_unsubscription() ?
-                for symbol in strat.symbols:
+                for symbol in strat.specs_derivs:
                     feed: list = self.symbol_feeds[symbol]
                     feed.remove(strat.name)
                 strat.active = False; strat.__del__()
+                Log.warning("Removed \"{strat} - {name}\"", **verbose)
