@@ -5,9 +5,12 @@ import warnings
 from enum import Enum
 from uuid import uuid4
 from pandas import Series, DataFrame, Timestamp, Timedelta
-from apscheduler.schedulers.background import BackgroundScheduler
 from pyRofex import Side as OrderSide, OrderType, TimeInForce
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
 from utils.constants import *
+from utils.functions import *
 from yfinance import Ticker
 
 # Suppress FutureWarning messages
@@ -89,7 +92,8 @@ class Signal:
             "size": self.size, "price": self.price,
             "type": self.type.name, "side": self.side.name,
             "oper": self.action.name, "tif": self.tif.name,
-            "SL": self.SL, "TP": self.TP, "id_order": self.ID}
+            "SL": self.SL, "TP": self.TP, "id_order": self.ID,
+            "comment": self.comment}
     
     @property
     def form(self):
@@ -126,10 +130,11 @@ class Strategy:
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     def __init__(self, name: str, symbols: list, tasks: dict = dict()):
 
-        strat_class = self.__class__.__name__
-        Log.configure(extra = {"obj": "Strategy"})
+        self.strat_class = self.__class__.__name__
+        verbose = {"name": name, "strat": self.strat_class}
 
         self.name, self.active = name, False
+        self.time_stopped = Timestamp("NaT")
         self.time_executed = Timestamp("NaT")
         self.time_activated = Timestamp("NaT")
         self.time_created = Timestamp.utcnow()
@@ -138,45 +143,49 @@ class Strategy:
         self.last_order = Signal.test(symbols[0])
         self.tasks = BackgroundScheduler()
 
-        verbose = {"name": name, "strat": strat_class}
-
-        tasks = {self.update_unders: self.FREQ_UPD_UNDERS, **tasks}
-        for task, freq in tasks.items():
-            freq: Timedelta = freq.total_seconds()
-            self.tasks.add_job(func = task, seconds = freq,
-                trigger = "interval", name = task.__name__)
+        if not tasks:
+            Log.info("No parallel tasks for \"{strat} - {name}\"", **verbose)
+        else:
+            for task, trigger in tasks.items():
+                self.tasks.add_job(trigger = trigger,
+                    func = task, name = task.__name__)
             
-        Log.info("Tasks for \"{strat} - {name}\":", **verbose)
-        self.tasks.print_jobs()
+            verbose["tasks"] = parse_tasks(self.tasks.get_jobs())
+            Log.info("Tasks for \"{strat} - {name}\": \n{tasks}", **verbose)
+
+        self.tasks.start(paused = True)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-    def update_derivs(self, specs: DataFrame):
-        self.specs_derivs = specs.copy()
-        unders = self.specs_derivs["underlying"].unique()
-        self.specs_unders = DataFrame(index = unders,
-                    columns = self.COLUMNS_UNDERLYING)
-        self.update_unders()
+    def __setattr__(self, name, value):
 
-    # FIXME: MOVE UNDERLYING DATA RETRIEVAL AND SCHEDULE TO MANAGER
-
-    def update_unders(self): 
-        if self.specs_derivs.empty: return
-        unders = Series(self.specs_unders.index)
-        specs_unders = unders.map(Ticker).map(self._parse_yf)
-        specs_unders = specs_unders.apply(Series).set_index(unders)
-        self.specs_unders = specs_unders
-
-    @classmethod
-    def _parse_yf(cls, ticker: Ticker):
-        data = ticker.fast_info
-        try: data = data.toJSON()
-        except: data = "{}"
-        return json.loads(data)
+        if (name == "active"):
+            now = Timestamp.utcnow()
+            is_active = getattr(self, "active", False)
+            assert isinstance(value, bool), "\"active\" flag must be bool!"
+            if not is_active and value:
+                setattr(self, "time_activated", now)
+                self.tasks.resume()
+            elif is_active and not value:
+                setattr(self, "time_stopped", now)
+                self.tasks.pause()
+            
+        super().__setattr__(name, value)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-    def on_tick(self, data: DataFrame) -> list:
+    def __del__(self):
+
+        self.tasks.shutdown(wait = False)
+        verbose = {"name": self.name, "strat": self.strat_class}
+        Log.info("Deleting \"{strat} - {name}\"...", **verbose)
+        del self
+
+    #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+    def on_tick(self, data_deriv: DataFrame, data_under: DataFrame) -> list:
         
         self.last_order.flip()
-        print("Strategy", self.name, "on_tick")
-        print(), print(data)
         return [self.last_order]
+
+if (__name__ == "__main__"):
+
+    Strategy("test", symbols = ["YPFD/ENE24", "GGAL/ENE24"])
+
