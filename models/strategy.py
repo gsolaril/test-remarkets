@@ -7,6 +7,7 @@ from uuid import uuid4
 from pandas import Series, DataFrame, Timestamp, Timedelta
 from pyRofex import Side as OrderSide, OrderType, TimeInForce
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 from utils.constants import *
@@ -254,7 +255,7 @@ class Strategy:
         # Para tener especificaciónes de derivados "a mano".
         self.specs_derivs = DataFrame(index = [*symbols])
         # Para tener "a mano" la última señal realizada.
-        self.last_order = Signal.test(symbols[0])
+        self.last_order = Signal.test([*symbols][0])
         # "Scheduler", para ejecutar tareas paralelas.
         self.tasks = BackgroundScheduler()
 
@@ -303,7 +304,8 @@ class Strategy:
         Al eliminar una estrategia, primero se desactivan sus tareas paralelas.
         Luego, se borra el objeto. No sin antes notificar de la operación.
         """
-        self.tasks.shutdown(wait = False) # Desactivar schedule.
+        try: self.tasks.shutdown(wait = False) # Desactivar scheduler.
+        except SchedulerNotRunningError: Log.warning("No tasks to shutdown")
         verbose = {"name": self.name, "strat": self.strat_class}
         Log.info("Deleting \"{strat} - {name}\"...", **verbose)
         del self # Destruir estrategia.

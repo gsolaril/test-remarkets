@@ -11,7 +11,7 @@ from yahooquery import Ticker
 
 from utils.functions import *
 from utils.constants import *
-from strategy import Strategy
+from models.strategy import Strategy
 
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -376,7 +376,7 @@ class Manager:
                 verbose["strat"] = strat.__class__.__name__
                 # pyRofex.market_data_unsubscription() ?
                 # Iterar sobre los derivados asociados a la estrategia.
-                for symbol in strat.specs_derivs:
+                for symbol in strat.symbols.keys():
                     # Remover el nombre de la estrategia, de dichos feeds.
                     feed: list = self.symbol_feeds[symbol]
                     feed.remove(strat.name)

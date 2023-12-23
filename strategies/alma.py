@@ -158,19 +158,19 @@ class Alma(Strategy):
         data.loc[is_deriv_buy, "price"] = data["deriv_ask"] # Se entra comprando en "ask".
         data.loc[is_deriv_buy, "SL"] = data["deriv_bid"] # Y se sale vendiendo en "bid".
         # Se prevee que el valor actual subirá en proporción a la tasa "taker".
-        data.loc[is_deriv_buy, "TP"] = data.eval("price * (1 + rate_taker)")
+        data.loc[is_deriv_buy, "TP"] = data.eval("price * (1 + rate_taker)").round(6)
 
         is_deriv_sell = data["rate_payer"].gt(self.thr_rate_payer) & data["rate_taker"].lt(0)
         data.loc[is_deriv_sell, "side"] = OrderSide.SELL
         data.loc[is_deriv_sell, "price"] = data["deriv_bid"] # Se entra vendiendo en "bid".
         data.loc[is_deriv_sell, "SL"] = data["deriv_ask"] # Y se sale comprando en "ask".
         # Se prevee que el valor actual bajará en proporción a la tasa "payer".
-        data.loc[is_deriv_sell, "TP"] = data.eval("price * (1 - rate_payer)")
+        data.loc[is_deriv_sell, "TP"] = data.eval("price * (1 - rate_payer)").round(6)
 
         # Para calcular la ganancia proyectada.
         data["profit"] = (data["TP"] - data["price"]).abs()
 
-        # Futuras lineas que suponen al spread inicial como el stop loss, y dimensionan
+        # TODO: Futuras lineas que suponen al spread inicial como el stop loss, y dimensionan
         # la operación para que el spread sea equivalente a un X % del tamaño de operación. 
         #data["size"] = data["price"] * self.risk_percentage
         #data["size"] /= (data["price"] - data["SL"]).abs()

@@ -9,7 +9,7 @@ from pandas import concat, merge
 from loguru import logger as Log
 
 from utils.constants import *
-from manager import Manager
+from models.manager import Manager
 from models.strategy import *
 from strategies.alma import Alma
 
@@ -129,7 +129,8 @@ class Interface(Manager):
             # Copiar historial de los derivados necesarios y de sus subyacentes.
             data_deriv = self.symbol_ticks.loc[is_feed] # derivados
             data_under = self.specs_unders.loc[strat_unders] # subyacentes
-            if self.debug: Log.debug(f"\"{strat_class} - {name}\" executed")
+            if self.debug:
+                Log.debug(f"Strategy\"{strat_class} - {name}\" executed")
             # Ejecutar función principal de estrategia, "Strategy.on_tick".
             try: signals = strat.on_tick(data_deriv, data_under)
             except Exception as EXC: Log.exception(EXC); continue
@@ -264,7 +265,7 @@ class Interface(Manager):
         # Printear excepción detallada sin interrumpir.
         else: Log.exception(entry)
 
-    def shutdown_manual(self):
+    def shutdown_manual(self): # FIXME: Por algun motivo, esto no está interrumpiendo la actividad...
         """
         Ante interrupción manual, ejecutar función "`shutdown`" y notificar del evento.
         """
@@ -287,7 +288,7 @@ class Interface(Manager):
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 #███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
 
-if __name__ == "__main__":
+if (__name__ == "__main__"):
 
     interface = Interface(debug = False)
     test_strategy = Alma(name = "test",
