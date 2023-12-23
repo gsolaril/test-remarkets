@@ -237,8 +237,8 @@ class Manager:
         de subyacentes para únicamente los instrumentos que se ven activos en las estrategias y en los WebSockets (es
         decir, incluidos en "`symbol_feeds`").
         Actualiza los valores previamente guardados en "`specs_unders`" con los nuevos descargados. Nota: es una función
-        encapsulada; debería ser ejecutada únicamente de manera interna, por el "`Scheduler`". No debería usarse de
-        manera aislada.
+        "privada"; debería ser ejecutada únicamente de manera interna, por el "`Scheduler`". No debería usarse de manera
+        aislada.
         """
         # No hacer nada si no hay feeds: no hay estrategias.
         if (len(self.symbol_feeds) == 0): return

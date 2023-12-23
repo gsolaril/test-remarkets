@@ -34,7 +34,7 @@ class Alma(Strategy):
     COLUMNS_CALC = ["maturity", "deriv_ask", "deriv_bid", "under_ask", "under_bid"]
     # Valores a incluir en formato JSON, dentro del "comment" de la señal.
     COLUMNS_COMMENT = dict(deriv_ask = "da", deriv_bid = "db", under_ask = "ua",
-                           rate_payer = "rp", rate_taker = "rt", exp_days = "exp")
+          rate_payer = "rp", rate_taker = "rt", profit = "pft", exp_days = "exp")
 
     def __init__(self, name: str, symbols: list,
                  thr_rate_taker: float = 0.0001,
@@ -146,6 +146,7 @@ class Alma(Strategy):
         data["exp_days"] = data["exp_days"].dt.total_seconds() / 86400
 
         # Crear columnas para las señales.
+        data["profit"] = numpy.nan
         order_columns = ["side", "price", "SL", "TP"]
         # Ancho de tabla original = numero de columna adonde empiezan las
         original_width = data.shape[1] # columnas con datos de las señales
@@ -165,6 +166,9 @@ class Alma(Strategy):
         data.loc[is_deriv_sell, "SL"] = data["deriv_ask"] # Y se sale comprando en "ask".
         # Se prevee que el valor actual bajará en proporción a la tasa "payer".
         data.loc[is_deriv_sell, "TP"] = data.eval("price * (1 - rate_payer)")
+
+        # Para calcular la ganancia proyectada.
+        data["profit"] = (data["TP"] - data["price"]).abs()
 
         # Futuras lineas que suponen al spread inicial como el stop loss, y dimensionan
         # la operación para que el spread sea equivalente a un X % del tamaño de operación. 
@@ -202,6 +206,9 @@ class Alma(Strategy):
 if (__name__ == "__main__"):
 
     under, premium, spread = 100, +4, 2
+    print(dict(deriv_bid = under + premium,
+        deriv_ask = under + premium + spread,
+        under_bid = under, under_ask = under))
     args = dict(deriv_bid = under + premium,
         deriv_ask = under + premium + spread,
         under_bid = under, under_ask = under)

@@ -252,7 +252,7 @@ class Strategy:
         # Para almacenar historial de senales operadas.
         self.signals = self.TEMPLATE_SIGNALS.copy()
         # Para tener especificaciónes de derivados "a mano".
-        self.specs_derivs = DataFrame(index = symbols.keys())
+        self.specs_derivs = DataFrame(index = [*symbols])
         # Para tener "a mano" la última señal realizada.
         self.last_order = Signal.test(symbols[0])
         # "Scheduler", para ejecutar tareas paralelas.

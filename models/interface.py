@@ -44,7 +44,6 @@ class Interface(Manager):
             exception_handler = self._on_exception)
 
         self.websocket = ENV.get("ws_client")
-        print("websocket:", self.websocket)
 
     #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
     @classmethod
@@ -218,6 +217,10 @@ class Interface(Manager):
         - "`entry`" ("`dict`"): Tick de mercado provisto por el WebSocket.
         """
         alert_symbols = set()
+        # Comprobar que es un tick valido.
+        is_valid_ask = len(entry["marketData"]["OF"]) > 0
+        is_valid_bid = len(entry["marketData"]["BI"]) > 0
+        if not (is_valid_ask or is_valid_bid): return
         # Formatear tick de mercado, afin a "symbol_ticks".
         entry = self.parse_data_market(entry)
         # Extraer y usar timestamp como índice en "symbol_ticks".
