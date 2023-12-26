@@ -40,7 +40,7 @@ La estructura es escalable: pueden agregarse funciones adicionales tranquilament
 
 Por otro lado, el programa dispone de un objeto primario llamado "<code><b><u>Interface</u></b></code>" que gestiona toda la interacción entre el exchange y los sistemas locales. Ésta clase posee 3 tipos de funciones:
 
-<ul><li><u>Listeners de WebSockets</u>: Sus nombres comienzan con "<code>_on</code>". Se ejecutan de manera automática cuando el exchange nos envía un paquete de datos, actualizandonos sobre un evento. Son funciones <u>privadas</u>: su objetivo es ser utilizadas solo dentro de la instancia de clase. No deberían usarse normalmente en el "scope global", excepto durante algún tipo de testing.
+<ul><li><u>Listeners de WebSockets</u>: Sus nombres comienzan con "<code>_on_</code>". Se ejecutan de manera automática cuando el exchange nos envía un paquete de datos, actualizandonos sobre un evento. Son funciones <u>privadas</u>: su objetivo es ser utilizadas solo dentro de la instancia de clase. No deberían usarse normalmente en el "scope global", excepto durante algún tipo de testing.
 </li><li><u>Gestión de estrategias</u>: Sus nombres terminan con "<code>_strategies</code>". Por ejemplo:
 <ul><li>"<code>load_strategies</code>" agrega estrategias mediante objetos "<code>Strategy</code>", a la "<code>Interface</code>".
 </li><li>"<code>toggle_strategies</code>" pausa/reanuda las estrategias especificadas según se desee.
@@ -109,7 +109,7 @@ Suponiendo que ya se tienen estrategias programadas bajo la estructura de "<code
 </li><li>Cargar estrategias al modelo:
 
 ```code
-interface.load_strategies(test_strategy)
+interface.load_strategies(list_strategies)
 ```
 
 </li><li>Por seguridad, las instancias de las estrategias inician inactivas. Se las debe activar manualmente:
